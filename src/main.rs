@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use rand::Rng;
+// use rand::Rng;
 use tokio::{
     io::AsyncReadExt,
     net::{
@@ -10,11 +10,11 @@ use tokio::{
     task::JoinHandle,
 };
 
-use tun::TunPacket;
+//use tun::TunPacket;
 
 pub mod write_all;
 
-mod mock_reply;
+//mod mock_reply;
 
 #[allow(dead_code)]
 enum Message {
@@ -71,7 +71,7 @@ enum AsyncMessage {
 
 #[tokio::main]
 async fn main() {
-    let listen = TcpListener::bind("0.0.0.0:3000").await.unwrap();
+    let listen = TcpListener::bind("192.168.1.11:3000").await.unwrap();
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
     let (tx_async, mut rx_async) = tokio::sync::mpsc::unbounded_channel::<AsyncMessage>();
@@ -84,7 +84,7 @@ async fn main() {
                     save_tasks.insert(id, task);
                 }
                 Some(AsyncMessage::Remove(id)) => {
-                    println!("task complete, so removed");
+                    //println!("task complete, so removed");
                     save_tasks.remove(&id);
                 }
                 None => {}
@@ -103,7 +103,7 @@ async fn main() {
                     map.insert(num, Arc::new(writer));
                 }
                 Some(Message::Data((num, buff))) => {
-                    println!("receive data from {num}:\n{buff:?}");
+                    //println!("receive data from {num}:\n{buff:?}");
                     match find_another(&map, num).await {
                         Some(writer) => {
                             let writer = Arc::clone(writer);
@@ -121,24 +121,24 @@ async fn main() {
                     }
                 }
                 Some(Message::Remove(num)) => {
-                    println!("remove {num}");
+                    //println!("remove {num}");
                     map.remove(&num);
                 }
-                Some(Message::Mock((num, buff))) => {
-                    println!("mock buff:\n {buff:?}");
-                    let writer = map.get(&num).unwrap().clone();
-                    let uuid = uuid::Uuid::new_v4().to_string();
-                    let tx_async_copy = tx_async.clone();
-                    let _ = tx_async.send(AsyncMessage::Add((
-                        uuid.clone(),
-                        tokio::spawn(async move {
-                            let time = rand::thread_rng().gen_range(100..3000);
-                            tokio::time::sleep(std::time::Duration::from_millis(time)).await;
-                            mock_reply::parse_tun_packet(Some(Ok(TunPacket::new(buff))), writer)
-                                .await;
-                            let _ = tx_async_copy.send(AsyncMessage::Remove(uuid));
-                        }),
-                    )));
+                Some(Message::Mock((_num, _buff))) => {
+                    //println!("mock buff:\n {buff:?}");
+                    // let writer = map.get(&num).unwrap().clone();
+                    // let uuid = uuid::Uuid::new_v4().to_string();
+                    // let tx_async_copy = tx_async.clone();
+                    // let _ = tx_async.send(AsyncMessage::Add((
+                    //     uuid.clone(),
+                    //     tokio::spawn(async move {
+                    //         let time = rand::thread_rng().gen_range(100..3000);
+                    //         tokio::time::sleep(std::time::Duration::from_millis(time)).await;
+                    //         mock_reply::parse_tun_packet(Some(Ok(TunPacket::new(buff))), writer)
+                    //             .await;
+                    //         let _ = tx_async_copy.send(AsyncMessage::Remove(uuid));
+                    //     }),
+                    // )));
                     //writer.write_all(src)
                 }
                 None => {
@@ -159,7 +159,7 @@ async fn main() {
             loop {
                 match reader.read(&mut len_buf[read_header_len..]).await {
                     Ok(size) => {
-                        println!("read in comming {size}");
+                        //println!("read in comming {size}");
                         if size == 0 {
                             let _ = tx.send(Message::Remove(index));
                             return;
@@ -168,12 +168,12 @@ async fn main() {
                         if read_header_len == 2 {
                             read_header_len = 0;
                             let body_len = u16::from_be_bytes(len_buf);
-                            println!("body len {body_len}");
+                            //println!("body len {body_len}");
                             match read_body(body_len, &mut reader).await {
                                 Ok(buf) => {
                                     //println!("ready body:\n {buf:?}");
-                                    //tx.send(Message::Data((index, buf))).unwrap();
-                                    let _ = tx.send(Message::Mock((index, buf)));
+                                    let _ = tx.send(Message::Data((index, buf)));
+                                    //let _ = tx.send(Message::Mock((index, buf)));
                                 }
                                 Err(_) => {
                                     let _ = tx.send(Message::Remove(index));
