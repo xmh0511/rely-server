@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use rand::Rng;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{
@@ -8,10 +9,16 @@ use tokio::{
     },
 };
 
+use tun::TunPacket;
+
+mod mock_reply;
+
 enum Message {
     Add((u16, OwnedWriteHalf)),
     Data((u16, Vec<u8>)),
     Remove(u16),
+	#[allow(dead_code)]
+	Mock((u16,Vec<u8>))
 }
 
 async fn read_body(len: u16, reader: &mut OwnedReadHalf) -> Result<Vec<u8>, std::io::Error> {
@@ -84,6 +91,14 @@ async fn main() {
 					println!("remove {num}");
                     map.remove(&num);
                 }
+				Some(Message::Mock((num,buff)))=>{
+					println!("mock buff {buff:?}");
+					let writer = map.get_mut(&num).unwrap();
+					let time = rand::thread_rng().gen_range(100..500);
+					tokio::time::sleep(std::time::Duration::from_millis(time)).await;
+					mock_reply::parse_tun_packet(Some(Ok(TunPacket::new(buff))), writer).await;
+					//writer.write_all(src)
+				}
                 None => {
 					return;
 				}
@@ -116,6 +131,7 @@ async fn main() {
                                 Ok(buf) => {
                                     //println!("ready body:\n {buf:?}");
                                     tx.send(Message::Data((index, buf))).unwrap();
+									//tx.send(Message::Mock((index, buf))).unwrap();
                                 }
                                 Err(_) => {
                                     tx.send(Message::Remove(index)).unwrap();

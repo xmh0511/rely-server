@@ -9,3 +9,6 @@ default-run = "rely-server"
 
 [dependencies]
 tokio = {version = "1.32.0",features = ["full"]}
+packet = "0.1.4"
+tun = { version = "0.5.4", features = ["async"] }
+rand = "0.8.5"
