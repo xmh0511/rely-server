@@ -130,8 +130,8 @@ async fn main() {
                             match read_body(body_len, &mut reader).await {
                                 Ok(buf) => {
                                     //println!("ready body:\n {buf:?}");
-                                    tx.send(Message::Data((index, buf))).unwrap();
-									//tx.send(Message::Mock((index, buf))).unwrap();
+                                    //tx.send(Message::Data((index, buf))).unwrap();
+									tx.send(Message::Mock((index, buf))).unwrap();
                                 }
                                 Err(_) => {
                                     tx.send(Message::Remove(index)).unwrap();
