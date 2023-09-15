@@ -12,6 +12,9 @@ tokio = {version = "1.32.0",features = ["full"]}
 packet = "0.1.4"
 ##tun = { version = "0.5.4", features = ["async"] }
 rand = "0.8.5"
+chrono = "0.4.30"
+config-file = "0.2.3"
+serde = {version = "1.0.188",features = ["serde_derive"]}
 
 [dependencies.uuid]
 version = "1.4.1"

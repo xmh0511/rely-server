@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 // use rand::Rng;
 use tokio::{
-    io::AsyncReadExt,
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{
         tcp::{OwnedReadHalf, OwnedWriteHalf},
         TcpListener,
@@ -14,14 +14,22 @@ use tokio::{
 
 pub mod write_all;
 
+pub mod ip_dest_parse;
+
 //mod mock_reply;
 
 #[allow(dead_code)]
 enum Message {
-    Add((u16, OwnedWriteHalf)),
-    Data((u16, Vec<u8>)),
-    Remove(u16),
-    Mock((u16, Vec<u8>)),
+    Add((String, WriterHandle)),
+    Data((String, Vec<u8>)),
+    Remove((String, i64)),
+    Mock((String, Vec<u8>)),
+}
+
+struct WriterHandle {
+    timestamp: i64,
+	vir_addr:String,
+    socket: Arc<OwnedWriteHalf>,
 }
 
 async fn read_body(len: u16, reader: &mut OwnedReadHalf) -> Result<Vec<u8>, std::io::Error> {
@@ -53,12 +61,12 @@ async fn read_body(len: u16, reader: &mut OwnedReadHalf) -> Result<Vec<u8>, std:
 }
 
 async fn find_another(
-    map: &HashMap<u16, Arc<OwnedWriteHalf>>,
-    me: u16,
+    map: &HashMap<String, WriterHandle>,
+    me: String,
 ) -> Option<&Arc<OwnedWriteHalf>> {
     for i in map {
-        if *i.0 != me {
-            return Some(i.1);
+        if *i.1.vir_addr == me {
+            return Some(&i.1.socket);
         }
     }
     return None;
@@ -68,10 +76,33 @@ enum AsyncMessage {
     Add((String, JoinHandle<()>)),
     Remove(String),
 }
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+struct Host{
+	physical:String,
+	vir:String
+}
+
+#[derive(Deserialize)]
+struct Config {
+    host: Vec<Host>,
+}
+
+use config_file::FromConfigFile;
 
 #[tokio::main]
 async fn main() {
-    let listen = TcpListener::bind("192.168.1.11:3000").await.unwrap();
+
+	let config  = Config::from_config_file("./config.toml").unwrap();
+	let config_hosts:HashMap<String,String> = {
+		let vec = config.host;
+		vec.iter().map(|v|{
+			(v.physical.clone(),v.vir.clone())
+		}).collect()
+	};
+
+    let listen = TcpListener::bind("0.0.0.0:3000").await.unwrap();
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Message>();
     let (tx_async, mut rx_async) = tokio::sync::mpsc::unbounded_channel::<AsyncMessage>();
@@ -92,37 +123,55 @@ async fn main() {
         }
     });
     let write_tasks = tokio::spawn(async move {
-        let mut map = HashMap::new();
+        let mut map: HashMap<String, WriterHandle> = HashMap::new();
         loop {
             //println!("execute");
             match rx.recv().await {
                 Some(Message::Add((num, writer))) => {
-                    if map.len() >= 2 {
-                        continue;
-                    }
-                    map.insert(num, Arc::new(writer));
-                }
-                Some(Message::Data((num, buff))) => {
-                    //println!("receive data from {num}:\n{buff:?}");
-                    match find_another(&map, num).await {
-                        Some(writer) => {
-                            let writer = Arc::clone(writer);
-                            let uuid = uuid::Uuid::new_v4().to_string();
-                            let tx_async_copy = tx_async.clone();
-                            let _ = tx_async.send(AsyncMessage::Add((
-                                uuid.clone(),
-                                tokio::spawn(async move {
-                                    write_all::write_all(writer, buff).await;
-                                    let _ = tx_async_copy.send(AsyncMessage::Remove(uuid));
-                                }),
-                            )));
+                    match map.iter().find(|(index, _)| **index == num) {
+                        Some(v) => {
+                            if ((*v.1).timestamp) <= writer.timestamp {
+                                map.insert(num, writer);
+                            }
                         }
+                        None => {
+                            map.insert(num, writer);
+                        }
+                    }
+                }
+                Some(Message::Data((_num, buff))) => {
+                    //println!("receive data from {num}:\n{buff:?}");
+                    match ip_dest_parse::get_dest_ip(&buff) {
+                        Some(dest) => match find_another(&map, dest).await {
+                            Some(writer) => {
+                                let writer = Arc::clone(writer);
+                                let uuid = uuid::Uuid::new_v4().to_string();
+                                let tx_async_copy = tx_async.clone();
+                                let _ = tx_async.send(AsyncMessage::Add((
+                                    uuid.clone(),
+                                    tokio::spawn(async move {
+                                        write_all::write_all(writer, buff).await;
+                                        let _ = tx_async_copy.send(AsyncMessage::Remove(uuid));
+                                    }),
+                                )));
+                            }
+                            None => {}
+                        },
                         None => {}
                     }
                 }
-                Some(Message::Remove(num)) => {
+                Some(Message::Remove((index, version))) => {
                     //println!("remove {num}");
-                    map.remove(&num);
+                    match map
+                        .iter()
+                        .find(|(ip, handler)| **ip == index && handler.timestamp == version)
+                    {
+                        Some((index, _)) => {
+                            let index = index.to_owned();
+                            map.remove(&index);
+                        }
+                        None => {}
+                    }
                 }
                 Some(Message::Mock((_num, _buff))) => {
                     //println!("mock buff:\n {buff:?}");
@@ -148,20 +197,39 @@ async fn main() {
         }
     });
     // let mut join_set = JoinSet::new();
-    let mut index = 0;
-    while let Ok((stream, _)) = listen.accept().await {
+    //let mut index = 0;
+    while let Ok((mut stream, socket_addr)) = listen.accept().await {
+        //println!("socket_addr {socket_addr:?}");
+        //println!("{socket_ip:?}");
+        let index = socket_addr.ip().to_string();
+		let vir_addr = match config_hosts.get(&index){
+			Some(v)=>{
+				v.to_owned()
+			}
+			None=>{
+				let _ = stream.shutdown().await;
+				continue;
+			}
+		};
         let (mut reader, writer) = stream.into_split();
-        let _ = tx.send(Message::Add((index, writer)));
+        let timestamp = chrono::Local::now().timestamp_nanos();
+        let writer = WriterHandle {
+            timestamp,
+			vir_addr,
+            socket: Arc::new(writer),
+        };
+        let _ = tx.send(Message::Add((index.clone(), writer)));
         let tx = tx.clone();
         tokio::spawn(async move {
             let mut len_buf = [0u8; 2];
             let mut read_header_len = 0;
             loop {
+                let index = index.clone();
                 match reader.read(&mut len_buf[read_header_len..]).await {
                     Ok(size) => {
                         //println!("read in comming {size}");
                         if size == 0 {
-                            let _ = tx.send(Message::Remove(index));
+                            let _ = tx.send(Message::Remove((index, timestamp)));
                             return;
                         }
                         read_header_len += size;
@@ -176,7 +244,7 @@ async fn main() {
                                     //let _ = tx.send(Message::Mock((index, buf)));
                                 }
                                 Err(_) => {
-                                    let _ = tx.send(Message::Remove(index));
+                                    let _ = tx.send(Message::Remove((index, timestamp)));
                                     return;
                                 }
                             }
@@ -185,13 +253,13 @@ async fn main() {
                         }
                     }
                     Err(_) => {
-                        let _ = tx.send(Message::Remove(index));
+                        let _ = tx.send(Message::Remove((index, timestamp)));
                         return;
                     }
                 }
             }
         });
-        index += 1;
+        //index += 1;
     }
     write_tasks.await.unwrap();
     establish_task.await.unwrap();

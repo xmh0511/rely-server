@@ -28,7 +28,7 @@ fn read_body(len: u16, reader: &mut TcpStream) -> Result<Vec<u8>, std::io::Error
     }
 }
 fn main(){
-    let mut socket = std::net::TcpStream::connect("127.0.0.1:3000").unwrap();
+    let mut socket = std::net::TcpStream::connect("192.168.1.139:3000").unwrap();
     let mut buff = [0u8;2];
 	let mut read_len = 0;
 	loop{
