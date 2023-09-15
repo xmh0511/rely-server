@@ -28,8 +28,10 @@ enum Message {
 
 struct WriterHandle {
     timestamp: i64,
-	vir_addr:String,
+    vir_addr: String,
     socket: Arc<OwnedWriteHalf>,
+    #[allow(dead_code)]
+    physical_addr:String
 }
 
 async fn read_body(len: u16, reader: &mut OwnedReadHalf) -> Result<Vec<u8>, std::io::Error> {
@@ -79,9 +81,9 @@ enum AsyncMessage {
 use serde::Deserialize;
 
 #[derive(Deserialize)]
-struct Host{
-	physical:String,
-	vir:String
+struct Host {
+    identifier: String,
+    vir: String,
 }
 
 #[derive(Deserialize)]
@@ -93,14 +95,13 @@ use config_file::FromConfigFile;
 
 #[tokio::main]
 async fn main() {
-
-	let config  = Config::from_config_file("./config.toml").unwrap();
-	let config_hosts:HashMap<String,String> = {
-		let vec = config.host;
-		vec.iter().map(|v|{
-			(v.physical.clone(),v.vir.clone())
-		}).collect()
-	};
+    let config = Config::from_config_file("./config.toml").unwrap();
+    let config_hosts: HashMap<String, String> = {
+        let vec = config.host;
+        vec.iter()
+            .map(|v| (v.identifier.clone(), v.vir.clone()))
+            .collect()
+    };
 
     let listen = TcpListener::bind("0.0.0.0:3000").await.unwrap();
 
@@ -201,22 +202,43 @@ async fn main() {
     while let Ok((mut stream, socket_addr)) = listen.accept().await {
         //println!("socket_addr {socket_addr:?}");
         //println!("{socket_ip:?}");
-        let index = socket_addr.ip().to_string();
-		let vir_addr = match config_hosts.get(&index){
-			Some(v)=>{
-				v.to_owned()
-			}
-			None=>{
-				let _ = stream.shutdown().await;
-				continue;
-			}
-		};
+        let its_identifier = {
+            let mut buf = [0u8; 32];
+            match stream.read_exact(&mut buf).await {
+                Ok(size) => {
+                    if size != 32{
+                        continue;
+                    }
+                    match String::from_utf8(buf.to_vec()){
+                        Ok(index)=>{
+                            index
+                        }
+                        Err(_)=>{
+                            continue;
+                        }
+                    }
+                },
+                Err(_) => {
+                    continue;
+                },
+            }
+        };
+        //println!("its identifier {its_identifier}");
+        let index = its_identifier;
+        let vir_addr = match config_hosts.get(&index) {
+            Some(v) => v.to_owned(),
+            None => {
+                let _ = stream.shutdown().await;
+                continue;
+            }
+        };
         let (mut reader, writer) = stream.into_split();
         let timestamp = chrono::Local::now().timestamp_nanos();
         let writer = WriterHandle {
             timestamp,
-			vir_addr,
+            vir_addr,
             socket: Arc::new(writer),
+            physical_addr:socket_addr.ip().to_string()
         };
         let _ = tx.send(Message::Add((index.clone(), writer)));
         let tx = tx.clone();

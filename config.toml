@@ -1,7 +1,7 @@
 [[host]]
-physical = "192.168.1.22"
-vir = "10.0.0.2"
+identifier = "96c9e0e6d08b243dd829d6858a6c0d51"
+vir = "10.0.0.1"
 
 [[host]]
-physical = "192.168.1.11"
-vir = "10.0.0.1"
+identifier = "96c9e0e6d08b243dd829d6858a6c0d41"
+vir = "10.0.0.2"
